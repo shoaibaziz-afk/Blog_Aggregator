@@ -80,7 +80,37 @@ func scrapeFeeds(s *state) error {
 	fmt.Printf("Fetching feed: %s\n", feed.Name)
 
 	for _, item := range rssFeed.Channel.Item {
-		fmt.Println(item.Title)
+
+		publishedAt := sql.NullTime{}
+
+		if item.PubDate != "" {
+			parsedTime, err := time.Parse(time.RFC1123Z, item.PubDate)
+			if err == nil {
+				publishedAt.Valid = true
+				publishedAt.Time = parsedTime
+			}
+		}
+
+		_, err = s.db.CreatePost(
+			context.Background(),
+			database.CreatePostParams{
+				Title: item.Title,
+				Url:   item.Link,
+				Description: sql.NullString{
+					String: item.Description,
+					Valid:  item.Description != "",
+				},
+				PublishedAt: publishedAt,
+				FeedID:      feed.ID,
+			},
+		)
+
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		fmt.Println("Saved post:", item.Title)
 	}
 
 	fmt.Println("========================================")
@@ -321,6 +351,40 @@ func handlerUnfollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handlerBrowse(s *state, cmd command, user database.User) error {
+
+	limit := 2
+
+	if len(cmd.args) == 1 {
+		fmt.Sscanf(cmd.args[0], "%d", &limit)
+	}
+
+	posts, err := s.db.GetPostsForUser(
+		context.Background(),
+		database.GetPostsForUserParams{
+			UserID: user.ID,
+			Limit:  int32(limit),
+		},
+	)
+
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		fmt.Println("Title:", post.Title)
+		fmt.Println("URL:", post.Url)
+
+		if post.Description.Valid {
+			fmt.Println("Description:", post.Description.String)
+		}
+
+		fmt.Println()
+	}
+
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -356,6 +420,7 @@ func main() {
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	if len(os.Args) < 2 {
 		fmt.Println("not enough arguments provided")
